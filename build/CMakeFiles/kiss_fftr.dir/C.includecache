@@ -1,0 +1,40 @@
+#IncludeRegexLine: ^[ 	]*[#%][ 	]*(include|import)[ 	]*[<"]([^">]+)([">])
+
+#IncludeRegexScan: ^.*$
+
+#IncludeRegexComplain: ^$
+
+#IncludeRegexTransform: 
+
+/home/reedf/schoolwork/voltage/2022s_workshop/SpecAn/_kiss_fft_guts.h
+kiss_fft.h
+/home/reedf/schoolwork/voltage/2022s_workshop/SpecAn/kiss_fft.h
+limits.h
+-
+alloca.h
+-
+
+/home/reedf/schoolwork/voltage/2022s_workshop/SpecAn/kiss_fft.h
+stdlib.h
+-
+stdio.h
+-
+math.h
+-
+string.h
+-
+xmmintrin.h
+-
+sys/types.h
+-
+
+/home/reedf/schoolwork/voltage/2022s_workshop/SpecAn/kiss_fftr.c
+kiss_fftr.h
+/home/reedf/schoolwork/voltage/2022s_workshop/SpecAn/kiss_fftr.h
+_kiss_fft_guts.h
+/home/reedf/schoolwork/voltage/2022s_workshop/SpecAn/_kiss_fft_guts.h
+
+/home/reedf/schoolwork/voltage/2022s_workshop/SpecAn/kiss_fftr.h
+kiss_fft.h
+/home/reedf/schoolwork/voltage/2022s_workshop/SpecAn/kiss_fft.h
+

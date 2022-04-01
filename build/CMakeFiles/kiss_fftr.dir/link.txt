@@ -1,0 +1,2 @@
+/usr/bin/arm-none-eabi-ar qc libkiss_fftr.a  CMakeFiles/kiss_fftr.dir/kiss_fftr.c.obj
+/usr/bin/arm-none-eabi-ranlib libkiss_fftr.a

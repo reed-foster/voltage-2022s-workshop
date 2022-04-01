@@ -1,0 +1,3 @@
+/home/reedf/schoolwork/voltage/2022s_workshop/SpecAn/build/pioasm/CMakeFiles/rebuild_cache.dir
+/home/reedf/schoolwork/voltage/2022s_workshop/SpecAn/build/pioasm/CMakeFiles/edit_cache.dir
+/home/reedf/schoolwork/voltage/2022s_workshop/SpecAn/build/pioasm/CMakeFiles/pioasm.dir

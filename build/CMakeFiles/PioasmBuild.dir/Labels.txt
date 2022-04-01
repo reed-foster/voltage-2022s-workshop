@@ -1,0 +1,13 @@
+# Target labels
+ PioasmBuild
+# Source files and their labels
+/home/reedf/schoolwork/voltage/2022s_workshop/SpecAn/build/CMakeFiles/PioasmBuild
+/home/reedf/schoolwork/voltage/2022s_workshop/SpecAn/build/CMakeFiles/PioasmBuild.rule
+/home/reedf/schoolwork/voltage/2022s_workshop/SpecAn/build/CMakeFiles/PioasmBuild-complete.rule
+/home/reedf/schoolwork/voltage/2022s_workshop/SpecAn/build/pioasm/src/PioasmBuild-stamp/PioasmBuild-install.rule
+/home/reedf/schoolwork/voltage/2022s_workshop/SpecAn/build/pioasm/src/PioasmBuild-stamp/PioasmBuild-mkdir.rule
+/home/reedf/schoolwork/voltage/2022s_workshop/SpecAn/build/pioasm/src/PioasmBuild-stamp/PioasmBuild-download.rule
+/home/reedf/schoolwork/voltage/2022s_workshop/SpecAn/build/pioasm/src/PioasmBuild-stamp/PioasmBuild-update.rule
+/home/reedf/schoolwork/voltage/2022s_workshop/SpecAn/build/pioasm/src/PioasmBuild-stamp/PioasmBuild-patch.rule
+/home/reedf/schoolwork/voltage/2022s_workshop/SpecAn/build/pioasm/src/PioasmBuild-stamp/PioasmBuild-configure.rule
+/home/reedf/schoolwork/voltage/2022s_workshop/SpecAn/build/pioasm/src/PioasmBuild-stamp/PioasmBuild-build.rule
