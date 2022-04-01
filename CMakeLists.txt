@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.13)
 
 include(pico_sdk_import.cmake)
 
-project(adc_fft_project C CXX ASM)
+project(specan_project C CXX ASM)
 
 set(PICO_CXX_ENABLE_EXCEPTIONS 1)
 set(PICO_CXX_ENABLE_RTTI 1)
@@ -11,7 +11,7 @@ pico_sdk_init()
 
 include("PicoLed/PicoLed.cmake")
 
-add_executable(specan specan.cpp)
+add_executable(specan specan.cpp colormaps.h)
 add_library(kiss_fftr kiss_fftr.c)
 add_library(kiss_fft kiss_fft.c)
 add_compile_definitions(FIXED_POINT=8)

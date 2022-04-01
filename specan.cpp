@@ -16,6 +16,9 @@
 // Neopixel LED Driver
 #include <PicoLed.hpp>
 
+// colormaps
+#include "colormaps.h"
+
 // set this to determine sample rate
 // 0     = 500,000 Hz
 // 960   = 50,000 Hz
@@ -32,21 +35,21 @@
 // to memory issues nothing will work properly
 #define NSAMP 512
 
-#define LED_STRIP_LENGTH 10
+#define LED_STRIP_LENGTH 8
 #define LED_STRIP_PIN 0
 
 // globals
 dma_channel_config cfg;
 uint dma_chan;
 // get fft bin index ranges for each LED
-uint16_t low_bins[LED_STRIP_LENGTH];
-uint16_t high_bins[LED_STRIP_LENGTH];
-int8_t levelcurve[NSAMP/2];
+uint16_t low_bins[LED_STRIP_LENGTH+1];
+uint16_t high_bins[LED_STRIP_LENGTH+1];
+uint16_t levelcurve[NSAMP/2];
 
 void setup();
 void sample(uint8_t *capture_buf);
 float get_bin_log_base(uint16_t led_count, uint16_t fft_length);
-void compute_levelcurve(int8_t *levelcurve);
+void compute_levelcurve(uint16_t *levelcurve);
 
 int main() {
   uint8_t cap_buf[NSAMP];
@@ -98,25 +101,32 @@ int main() {
     // get LED brightness
     for (int i = 0; i < LED_STRIP_LENGTH; i++) {
         uint32_t power_led = 0;
-        for (int bin = low_bins[i]; bin <= high_bins[i]; bin++) {
+        for (int bin = low_bins[i+1]; bin <= high_bins[i+1]; bin++) {
             power_led += power[bin]*levelcurve[bin];
         }
         // printf("led %02i power = %d\n", i, power_led);
         // convert to brightness
-        uint8_t new_brightness;
-        if (power_led >= 1500) {
-            new_brightness = 255;
+        uint8_t color_idx = 0;
+        float new_brightness = sqrt(power_led);
+        if (new_brightness >= 160) {
+            new_brightness = 160;
+            color_idx = 255;
         } else {
-            new_brightness = (uint8_t)((power_led*256)/1500);
+            color_idx = (power_led*255)/25600;
         }
+        new_brightness = (255*(new_brightness+32))/192;
         if (new_brightness > led_brightness[i]) {
-            led_brightness[i] = new_brightness;
+            led_brightness[i] = (uint8_t)new_brightness;
         } else {
-            led_brightness[i] = 0.9 * led_brightness[i];
+            led_brightness[i] = 0.88 * led_brightness[i];
         }
-        new_brightness = led_brightness[i];
+        uint8_t b = led_brightness[i];
+        PicoLed::Color rgb = PicoLed::RGB(
+        //        (b*hot[3*color_idx])/255, (b*hot[3*color_idx+1])/255, (b*hot[3*color_idx+2])/255);
+        //        (b*parula[3*color_idx])/255, (b*parula[3*color_idx+1])/255, (b*parula[3*color_idx+2])/255);
+                (b*turbo[3*color_idx])/255, (b*turbo[3*color_idx+1])/255, (b*turbo[3*color_idx+2])/255);
         // set brightness of led
-        ledStrip.setPixelColor(i, PicoLed::RGB(new_brightness,new_brightness,new_brightness));
+        ledStrip.setPixelColor(i, rgb);
     }
     ledStrip.show();
   }
@@ -146,10 +156,10 @@ void setup() {
   stdio_init_all();
 
   // calculate allocation of frequency ranges to leds
-  float base = get_bin_log_base(LED_STRIP_LENGTH, NSAMP/2);
+  float base = get_bin_log_base(LED_STRIP_LENGTH+1, NSAMP/2);
   uint16_t count = 0;
   if (base) {
-      for (int led_idx = 0; led_idx < LED_STRIP_LENGTH; led_idx++) {
+      for (int led_idx = 0; led_idx < LED_STRIP_LENGTH+1; led_idx++) {
           low_bins[led_idx] = count;
           printf("bin %d range = %5.2f - ", led_idx, (float)count*FSAMP/NSAMP);
           count += int(pow(base, led_idx) + 0.5);
@@ -219,13 +229,18 @@ float get_bin_log_base(uint16_t led_count, uint16_t fft_length) {
     return 0;
 }
 
-void compute_levelcurve(int8_t *levelcurve) {
+void compute_levelcurve(uint16_t *levelcurve) {
     // measured microphone response
     // f is frequency in Hz of a sinewave, a is amplitude of amplifier output in mVpp
     // f = [150 220 300 400 500 550 600 650 700 800 900 1000 1500 2000 2500 2800 3000 3500 4000 5000 7500 9000 12000 15000];
     // a = [100 200 330 600 750 710 690 640 640 640 700  660  570  650  460 1050 1050  640  250  660  190  190    90    90];
+    // poles at 500Hz (bin 5) and 3500Hz (bin 37)
+    // remeasured with good speaker and low freqency pole is gone
+    // high frequency pole is probably still around 3500Hz
     for (uint16_t i = 0 ; i < NSAMP/2; i++) {
-        levelcurve[i] = 1;
+        // pole at 5kHz
+        //levelcurve[i] = 256*(1+pow(i/30,0.2));
+        levelcurve[i] = 256;
     }
 }
 
