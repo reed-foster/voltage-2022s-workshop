@@ -35,8 +35,9 @@
 // to memory issues nothing will work properly
 #define NSAMP 512
 
-#define LED_STRIP_LENGTH 8
+#define LED_STRIP_LENGTH 16
 #define LED_STRIP_PIN 0
+#define WRGB 1
 
 // globals
 dma_channel_config cfg;
@@ -54,7 +55,6 @@ void compute_levelcurve(uint16_t *levelcurve);
 int main() {
   uint8_t cap_buf[NSAMP];
   uint32_t power[NSAMP/2];
-  uint64_t total_power = 0;
   uint64_t max_power = 0;
   kiss_fft_scalar fft_in[NSAMP]; // kiss_fft_scalar is a float
   kiss_fft_cpx fft_out[NSAMP];
@@ -66,7 +66,12 @@ int main() {
   setup();
 
   // set up LED strip
+#ifdef WRGB
+  // color order for PicoLed::WRGB define isn't quite right; just do it manually
+  auto ledStrip = PicoLed::addLeds<PicoLed::WS2812B>(pio0, 0, LED_STRIP_PIN, LED_STRIP_LENGTH, PicoLed::GREEN, PicoLed::RED, PicoLed::BLUE, PicoLed::WHITE);
+#else
   auto ledStrip = PicoLed::addLeds<PicoLed::WS2812B>(pio0, 0, LED_STRIP_PIN, LED_STRIP_LENGTH, PicoLed::FORMAT_GRB);
+#endif
   ledStrip.setBrightness(64);
   ledStrip.fill(PicoLed::RGB(255,0,0));
   ledStrip.show();
@@ -91,12 +96,6 @@ int main() {
     kiss_fftr(fft_cfg , fft_in, fft_out);
     for (int i = 0; i < NSAMP/2; i++) {
         power[i] = fft_out[i].r*fft_out[i].r+fft_out[i].i*fft_out[i].i;
-        total_power += power[i];
-    }
-    if (total_power > max_power) {
-        max_power = total_power;
-    } else {
-        total_power = total_power * 0.95;
     }
     // get LED brightness
     for (int i = 0; i < LED_STRIP_LENGTH; i++) {
@@ -104,29 +103,32 @@ int main() {
         for (int bin = low_bins[i+1]; bin <= high_bins[i+1]; bin++) {
             power_led += power[bin]*levelcurve[bin];
         }
-        // printf("led %02i power = %d\n", i, power_led);
+        float psd = 1e-3 * (power_led / (high_bins[i+1]-low_bins[i+1]+1));
+        // printf("led %02i psd = %.4e\n", i, psd);
         // convert to brightness
-        uint8_t color_idx = 0;
-        float new_brightness = sqrt(power_led);
-        if (new_brightness >= 160) {
-            new_brightness = 160;
-            color_idx = 255;
-        } else {
-            color_idx = (power_led*255)/25600;
+        float color = log2(psd);
+        uint8_t color_idx;
+        float new_brightness = pow(psd,2);
+        if (new_brightness >= 10) {
+            new_brightness = 10;
         }
-        new_brightness = (255*(new_brightness+32))/192;
+        if (color > 0) {
+            color_idx = 255;
+        } else if (color > -8) {
+            color_idx = ((color+8)*255)/8;
+        } else {
+            color_idx = 0;
+        }
+        new_brightness = (255*(new_brightness+0.1))/10;
         if (new_brightness > led_brightness[i]) {
             led_brightness[i] = (uint8_t)new_brightness;
         } else {
-            led_brightness[i] = 0.88 * led_brightness[i];
+            led_brightness[i] = 0.9 * led_brightness[i];
         }
         uint8_t b = led_brightness[i];
-        PicoLed::Color rgb = PicoLed::RGB(
-        //        (b*hot[3*color_idx])/255, (b*hot[3*color_idx+1])/255, (b*hot[3*color_idx+2])/255);
-        //        (b*parula[3*color_idx])/255, (b*parula[3*color_idx+1])/255, (b*parula[3*color_idx+2])/255);
-                (b*turbo[3*color_idx])/255, (b*turbo[3*color_idx+1])/255, (b*turbo[3*color_idx+2])/255);
+        PicoLed::Color rgbw = PicoLed::RGBW(turbo[3*color_idx], turbo[3*color_idx+1], turbo[3*color_idx+2], b);
         // set brightness of led
-        ledStrip.setPixelColor(i, rgb);
+        ledStrip.setPixelColor(i, rgbw);
     }
     ledStrip.show();
   }
@@ -156,7 +158,10 @@ void setup() {
   stdio_init_all();
 
   // calculate allocation of frequency ranges to leds
-  float base = get_bin_log_base(LED_STRIP_LENGTH+1, NSAMP/2);
+  float base = get_bin_log_base(LED_STRIP_LENGTH+1, NSAMP/4); // only go up to 12kHz
+  // this will give bins with frequencies (in Hz):
+  // [(93.75, 187.5), (281.25, 468.75), (562.5, 843.75), (937.5, 1500.0),
+  // (1593.75, 2625.0), (2718.75, 4406.25), (4500.0, 7312.5), (7406.25, 12000.0)]
   uint16_t count = 0;
   if (base) {
       for (int led_idx = 0; led_idx < LED_STRIP_LENGTH+1; led_idx++) {
@@ -239,7 +244,7 @@ void compute_levelcurve(uint16_t *levelcurve) {
     // high frequency pole is probably still around 3500Hz
     for (uint16_t i = 0 ; i < NSAMP/2; i++) {
         // pole at 5kHz
-        //levelcurve[i] = 256*(1+pow(i/30,0.2));
+        levelcurve[i] = 256*(1+pow(i/30,2));
         levelcurve[i] = 256;
     }
 }
