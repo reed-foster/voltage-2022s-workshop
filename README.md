@@ -65,3 +65,20 @@ Device     Boot Start    End Sectors  Size Id Type
 ~/voltage-2022s-workshop/build
 # cp specan.uf2 /mnt/pico
 ```
+
+## Extensions / Recommended Modifications
+If you’re done tinkering with the spectrum analyzer and want a new challenge, take a look at these ideas.
+
+You could consider adding a beat detector to flash the LEDs brightly when a downbeat occurs. See https://www.badlogicgames.com/wordpress/?p=161 for some information on spectral flux and onset detection.
+
+If you are more interested in making sound than analyzing it, you could make your own synthesizer with your teensy. Here are some different sound synthesis techniques for making interesting sounds:
+https://blog.landr.com/subtractive-synthesis/
+https://cymatics.fm/blogs/production/fm-synthesis
+https://www.soundonsound.com/techniques/amplitude-modulation
+
+If you’re looking for a big challenge, you could also create your own pitch detection algorithm. Here are some resources on pitch detection:
+http://marsyas.cs.uvic.ca/mirBook/csc475_monophonic_pitch.pdf
+http://musicweb.ucsd.edu/~trsmyth/analysis/Harmonic_Product_Spectrum.html
+https://www.researchgate.net/publication/281454651_Polyphonic_Pitch_Detection_by_Matching_Spectral_and_Autocorrelation_Peaks
+https://sethares.engr.wisc.edu/vocoders/phasevocoder.html
+
