@@ -35,9 +35,10 @@
 // to memory issues nothing will work properly
 #define NSAMP 512
 
+//#define LED_STRIP_LENGTH 120
 #define LED_STRIP_LENGTH 16
 #define LED_STRIP_PIN 0
-#define WRGB 1
+#define WRGB 0
 
 // globals
 dma_channel_config cfg;
@@ -106,16 +107,16 @@ int main() {
         float psd = 1e-3 * (power_led / (high_bins[i+1]-low_bins[i+1]+1));
         // printf("led %02i psd = %.4e\n", i, psd);
         // convert to brightness
-        float color = log2(psd);
+        float log_psd = log2(psd);
         uint8_t color_idx;
         float new_brightness = pow(psd,2);
         if (new_brightness >= 10) {
             new_brightness = 10;
         }
-        if (color > 0) {
+        if (log_psd > 0) {
             color_idx = 255;
-        } else if (color > -8) {
-            color_idx = ((color+8)*255)/8;
+        } else if (log_psd > -8) {
+            color_idx = ((log_psd+8)*255)/8;
         } else {
             color_idx = 0;
         }
@@ -126,9 +127,17 @@ int main() {
             led_brightness[i] = 0.9 * led_brightness[i];
         }
         uint8_t b = led_brightness[i];
-        PicoLed::Color rgbw = PicoLed::RGBW(turbo[3*color_idx], turbo[3*color_idx+1], turbo[3*color_idx+2], b);
+#ifdef WRGB
+        b = b >> 4;
+        b = b <= 1 ? 1 : b;
+        uint8_t cb = (b <= 4 ? 4 : b) << 4;
+        PicoLed::Color color = PicoLed::RGBW((cb*turbo[3*color_idx])/255, (cb*turbo[3*color_idx+1])/255, (cb*turbo[3*color_idx+2])/255, b);
+#else
+        b = b <= 32 ? 32 : b;
+        PicoLed::Color color = PicoLed::RGB((b*turbo[3*color_idx])/255, (b*turbo[3*color_idx+1])/255, (b*turbo[3*color_idx+2])/255);
+#endif
         // set brightness of led
-        ledStrip.setPixelColor(i, rgbw);
+        ledStrip.setPixelColor(i, color);
     }
     ledStrip.show();
   }
