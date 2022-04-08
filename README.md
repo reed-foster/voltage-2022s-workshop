@@ -12,7 +12,22 @@ That is, a note which lights up an LED with index `i` played an octave higher wo
 The brightness and color of each LED is determined by the average [Power Spectral Density (PSD)](https://en.wikipedia.org/wiki/Spectral_density) over the frequency range assigned to that LED.
 ## Setup
 
+### Kit assembly
+
+Connect the microphone and ring of LEDs as shown in the diagram below.
 ![Breadboard](breadboard.png)
+If you're unsure about the location of the pins, check out the pinout for the Raspberry Pi Pico [here](https://www.raspberrypi.com/documentation/microcontrollers/raspberry-pi-pico.html).
+
+|Peripheral Pin | Pi Pico Pin |
+|---------------|-------------|
+| LED vdd       | 40 (VBUS)   |
+| LED gnd       | 38 (GND)    |
+| LED input     | 1 (GP0)     |
+|---------------|-------------|
+| mic vdd       | 36 (3V3)    |
+| mic gnd       | 33 (GND)    |
+| mic output    | 31 (ADC0)   |
+
 
 Ensure that you've installed the Pi Pico SDK. Follow the guide [here](https://datasheets.raspberrypi.com/pico/getting-started-with-pico.pdf)
 
