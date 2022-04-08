@@ -69,9 +69,11 @@ Device     Boot Start    End Sectors  Size Id Type
 ## Extensions / Recommended Modifications
 If you’re done tinkering with the spectrum analyzer and want a new challenge, take a look at these ideas.
 
-You could consider adding a beat detector to flash the LEDs brightly when a downbeat occurs. See https://www.badlogicgames.com/wordpress/?p=161 for some information on spectral flux and onset detection.
+You could consider adding a beat detector to determine the tempo of the music and flash different colors or flash the LEDs brightly to the beat.
+The LEDs already do this somewhat, but you could exaggerate the effect.
+See https://www.badlogicgames.com/wordpress/?p=161 for some information on spectral flux and onset detection.
 
-If you are more interested in making sound than analyzing it, you could make your own synthesizer with your teensy. Here are some different sound synthesis techniques for making interesting sounds:
+If you are more interested in making sound than analyzing it, you could make your own synthesizer with your Pi Pico. Here are some different sound synthesis techniques for making interesting sounds:
 https://blog.landr.com/subtractive-synthesis/
 https://cymatics.fm/blogs/production/fm-synthesis
 https://www.soundonsound.com/techniques/amplitude-modulation
