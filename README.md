@@ -23,7 +23,6 @@ If you're unsure about the location of the pins, check out the pinout for the Ra
 | LED vdd       | 40 (VBUS)   |
 | LED gnd       | 38 (GND)    |
 | LED input     | 1 (GP0)     |
-|---------------|-------------|
 | mic vdd       | 36 (3V3)    |
 | mic gnd       | 33 (GND)    |
 | mic output    | 31 (ADC0)   |
