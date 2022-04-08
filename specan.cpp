@@ -35,10 +35,10 @@
 // to memory issues nothing will work properly
 #define NSAMP 512
 
-//#define LED_STRIP_LENGTH 120
-#define LED_STRIP_LENGTH 16
+#define LED_STRIP_LENGTH 120
+//#define LED_STRIP_LENGTH 16
 #define LED_STRIP_PIN 0
-#define WRGB 0
+//#define WRGB 0
 
 // globals
 dma_channel_config cfg;

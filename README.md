@@ -12,6 +12,8 @@ That is, a note which lights up an LED with index `i` played an octave higher wo
 The brightness and color of each LED is determined by the average [Power Spectral Density (PSD)](https://en.wikipedia.org/wiki/Spectral_density) over the frequency range assigned to that LED.
 ## Setup
 
+![Breadboard](breadboard.png)
+
 Ensure that you've installed the Pi Pico SDK. Follow the guide [here](https://datasheets.raspberrypi.com/pico/getting-started-with-pico.pdf)
 
 Symlink the PicoLed library into the repo root
