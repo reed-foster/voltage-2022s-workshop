@@ -16,6 +16,7 @@
 #include "hardware/adc.h"
 #include "hardware/dma.h"
 #include "kiss_fftr.h"
+#include "_kiss_fft_guts.h"
 
 // Neopixel LED Driver
 #include <PicoLed.hpp>
@@ -51,14 +52,15 @@
 // for NSAMP = 512, we'll have FFT data with a resolution of 96Hz/div
 // MID_RES FFT will incrase that to 24Hz/div, and HIGH_RES FFT will have
 // a resolution of 12Hz/div
-#define HIGH_RES_FACTOR 16
+#define HIGH_RES_FACTOR 8
 #define MID_RES_FACTOR 4
 // we'll offload the computation of the large FFT to a second core because it will take a while
+#define SEMAPHOREDEBUG
 #endif
 
 // FMAX/FMIN are maximum/minimum frequency displayed by LEDs
 #define FMAX 12000.0
-#define FMIN 50
+#define FMIN 100
 #define MAX_BIN NSAMP*FMAX/FSAMP
 #define MIN_BIN NSAMP*FMIN/FSAMP
 
@@ -81,15 +83,47 @@ uint16_t levelcurve_mr[MID_RES_FACTOR*NSAMP/2];
 uint16_t levelcurve_hr[HIGH_RES_FACTOR*NSAMP/2];
 
 // shared global buffers and semaphore
-kiss_fft_scalar hr_fft_in[NSAMP*HIGH_RES_FACTOR]; // kiss_fft_scalar is a float
-kiss_fft_cpx hr_fft_out[NSAMP*HIGH_RES_FACTOR];
+kiss_fft_scalar * hr_fft_in;//[NSAMP*HIGH_RES_FACTOR];
+kiss_fft_cpx * hr_fft_out;//[NSAMP*HIGH_RES_FACTOR];
 semaphore_t fft_sem;
 bool todo_fft;
 
 void setup();
 void sample(uint8_t *capture_buf);
 void compute_levelcurves();
+void kiss_fft_test();
 void core1_entry();
+
+void kiss_fft_test() {
+    printf("==== testing kiss_fft ====\n");
+    for (int nfft = 16; nfft <= 1024; nfft *= 8) {
+        kiss_fft_scalar x[nfft];
+        kiss_fft_cpx X[nfft];
+        kiss_fftr_cfg fft_cfg = kiss_fftr_alloc(nfft,false,0,0);
+        // prepare x
+        float omega0 = 2*3.14159265/nfft;
+        for (int pre = 1; pre <= 8; pre *= 2) {
+            printf("\ntesting cos(%d*omega0*n):\n",pre);
+            printf("x = [");
+            for (int n = 0; n < nfft; n++) {
+                x[n] = KISS_FFT_COS(omega0*pre*n);
+                printf("%d", x[n]);
+                if (n < nfft-1) { printf(", "); }
+                if (n % 16 == 0) { printf("\n"); }
+            }
+            printf("]\nX = [");
+            kiss_fftr(fft_cfg, x, X);
+            for (int k = 0; k < nfft/2; k++) {
+                printf("%d",X[k].r);
+                if (X[k].i >= 0) { printf("+"); }
+                printf("%dj", X[k].i);
+                if (k < nfft/2-1) { printf(", "); }
+                if (k % 16 == 0) { printf("\n"); }
+            }
+            printf("]\n");
+        }
+    }
+}
 
 void core1_entry() {
     kiss_fftr_cfg hr_fft_cfg = kiss_fftr_alloc(NSAMP*HIGH_RES_FACTOR,false,0,0);
@@ -97,12 +131,35 @@ void core1_entry() {
     while (1) {
         bool do_fft = sem_acquire_timeout_us(&fft_sem, 100);
         if (do_fft) {
+#ifdef SEMAPHOREDEBUG
             printf("1:acq\n");
+#endif
             if (todo_fft) {
+                //printf("x[n] = [");
+                //for (int n = 0; n < NSAMP*HIGH_RES_FACTOR; n++) {
+                //    printf("%d", hr_fft_in[n]);
+                //    if (n < NSAMP*HIGH_RES_FACTOR-1) {
+                //        printf(", ");
+                //        if (n % 32 == 31) { printf("\n"); }
+                //    }
+                //}
                 kiss_fftr(hr_fft_cfg, hr_fft_in, hr_fft_out);
+                //printf("]\nX[k] = [");
+                //for (int k = 0; k < NSAMP*HIGH_RES_FACTOR/2; k++) {
+                //    printf("%d", hr_fft_out[k].r);
+                //    if (hr_fft_out[k].i >= 0) { printf("+"); }
+                //    printf("%dj", hr_fft_out[k].i);
+                //    if (k < NSAMP*HIGH_RES_FACTOR/2-1) {
+                //        printf(", ");
+                //        if (k % 32 == 31) { printf("\n"); }
+                //    }
+                //}
+                //printf("]\n");
                 todo_fft = false;
             }
+#ifdef SEMAPHOREDEBUG
             printf("1:rel\n");
+#endif
             sem_release(&fft_sem);
         }
         sleep_ms(2);
@@ -113,14 +170,14 @@ void core1_entry() {
 int main() {
     uint8_t cap_buf[NSAMP];
     float led_psd[LED_STRIP_LENGTH];
-    kiss_fft_scalar lr_fft_in[NSAMP]; // kiss_fft_scalar is a float
-    kiss_fft_cpx lr_fft_out[NSAMP];
     kiss_fftr_cfg lr_fft_cfg = kiss_fftr_alloc(NSAMP,false,0,0);
-    kiss_fft_scalar mr_fft_in[NSAMP*MID_RES_FACTOR]; // kiss_fft_scalar is a float
-    kiss_fft_cpx mr_fft_out[NSAMP*MID_RES_FACTOR];
     kiss_fftr_cfg mr_fft_cfg = kiss_fftr_alloc(NSAMP*MID_RES_FACTOR,false,0,0);
     // keep a copy of the global input buffer for the highres FFT
-    kiss_fft_scalar hr_fft_ibuf[NSAMP*HIGH_RES_FACTOR];
+    kiss_fft_scalar * hr_fft_ibuf;
+    kiss_fft_scalar * mr_fft_in;
+    kiss_fft_scalar * lr_fft_in;
+    kiss_fft_cpx * lr_fft_out;
+    kiss_fft_cpx * mr_fft_out;
   
     // track brightness of leds to give some persistence
     uint8_t led_brightness[LED_STRIP_LENGTH];
@@ -142,6 +199,18 @@ int main() {
     uint32_t last_sum[HIGH_RES_FACTOR] = {0};
 
     sleep_ms(1000);
+
+    // hr_fft_ibuf is used by core0
+    // hr_fft_in is used by core1
+    hr_fft_ibuf = (kiss_fft_scalar *)malloc(NSAMP*HIGH_RES_FACTOR*sizeof(kiss_fft_scalar));
+    hr_fft_in = (kiss_fft_scalar *)malloc(NSAMP*HIGH_RES_FACTOR*sizeof(kiss_fft_scalar));
+    mr_fft_in = (kiss_fft_scalar *)malloc(NSAMP*MID_RES_FACTOR*sizeof(kiss_fft_scalar));
+    lr_fft_in = (kiss_fft_scalar *)malloc(NSAMP*sizeof(kiss_fft_scalar));
+    mr_fft_out = (kiss_fft_cpx *)malloc(NSAMP*MID_RES_FACTOR*sizeof(kiss_fft_cpx));
+    lr_fft_out = (kiss_fft_cpx *)malloc(NSAMP*sizeof(kiss_fft_cpx));
+    hr_fft_out = (kiss_fft_cpx *)malloc(NSAMP*HIGH_RES_FACTOR*sizeof(kiss_fft_cpx));
+    
+    sleep_ms(1000);
     printf("base = %2.5f\n", base);
     printf("center_freqs = [\n");
     for (int i = 0; i < 10; i++) {
@@ -159,6 +228,7 @@ int main() {
         printf("\n");
     }
     printf("]\n");
+    //kiss_fft_test();
     
     // set up semaphore for sending data to and from core1 for computing the high res FFT
     todo_fft = true;
@@ -200,10 +270,11 @@ int main() {
         }
         bool process_fft = sem_acquire_timeout_us(&fft_sem, 100);
         if (process_fft) {
+#ifdef SEMAPHOREDEBUG
             printf("0:acq\n");
+#endif
             if (!todo_fft) {
                 // get data from FFT results and set LED brightness
-                printf("HR LED_PSD = [\n");
                 for (int i = 0; i < LED_STRIP_LENGTH; i++) {
                     if (resolution[i] != HR) { break; }
                     uint32_t led_power = 0;
@@ -212,18 +283,15 @@ int main() {
                         led_power += levelcurve_hr[bin]*(X.r*X.r + X.i*X.i);
                     }
                     led_psd[i] = 1e-3 * (led_power / (upper_bins[i] - lower_bins[i] + 1));
-                    printf("%f, ", led_psd[i]);
-                    if (i % 12 == 11) {
-                        printf("\n");
-                    }
                 }
-                printf("]\n");
 
                 // send core to do FFT
                 memcpy(hr_fft_in, hr_fft_ibuf, sizeof(kiss_fft_scalar)*NSAMP*HIGH_RES_FACTOR);
                 todo_fft = true;
             }
+#ifdef SEMAPHOREDEBUG
             printf("0:rel\n");
+#endif
             sem_release(&fft_sem);
         } else {
             sleep_ms(2);
@@ -290,12 +358,19 @@ int main() {
         }
         ledStrip.show();
         cycle++;
-        cycle = cycle % MID_RES_FACTOR;
     }
   
     // should never get here
     kiss_fft_free(lr_fft_cfg);
     kiss_fft_free(mr_fft_cfg);
+
+    free(hr_fft_ibuf);
+    free(hr_fft_in);
+    free(mr_fft_in);
+    free(lr_fft_in);
+    free(mr_fft_out);
+    free(lr_fft_out);
+    free(hr_fft_out);
 }
 
 void sample(uint8_t *capture_buf) {
@@ -321,8 +396,8 @@ void setup() {
     // calculate allocation of frequency ranges to leds
     base = pow((double)FMAX/FMIN,1.0/((double)(LED_STRIP_LENGTH-1)));
     hr_max_led_idx = 0;
-    double lr_lim = (double)FSAMP*(0.5/((double)NSAMP));
-    double mr_lim = (double)FSAMP*(0.5/((double)NSAMP*MID_RES_FACTOR));
+    double lr_lim = (double)FSAMP*(1/((double)NSAMP));
+    double mr_lim = (double)FSAMP*(1/((double)NSAMP*MID_RES_FACTOR));
     for (int led_idx = 0; led_idx < LED_STRIP_LENGTH; led_idx++) {
         center_freqs[led_idx] = FMIN*pow(base, (double)led_idx);
         if (led_idx == 0) {
