@@ -10,6 +10,7 @@
 // multicore + queue
 #include "pico/multicore.h"
 #include "pico/util/queue.h"
+#include "pico/sem.h"
 
 // ADC/FFT
 #include "hardware/adc.h"
@@ -43,14 +44,14 @@
 #define LED_STRIP_LENGTH 16
 #define WRGB 0
 #else
-#define NSAMP 256
+#define NSAMP 512
 #define LED_STRIP_LENGTH 120
 // multiresolution analysis:
 // HIGH_RES_FACTOR: X*NSAMP-point FFT for high resolution transform
-// for NSAMP = 1024, we'll have FFT data with a resolution of 48Hz/div
-// MID_RES FFT will incrase that to 12Hz/div, and HIGH_RES FFT will have
-// a resolution of 3Hz/div
-#define HIGH_RES_FACTOR 8
+// for NSAMP = 512, we'll have FFT data with a resolution of 96Hz/div
+// MID_RES FFT will incrase that to 24Hz/div, and HIGH_RES FFT will have
+// a resolution of 12Hz/div
+#define HIGH_RES_FACTOR 16
 #define MID_RES_FACTOR 4
 // we'll offload the computation of the large FFT to a second core because it will take a while
 #endif
@@ -73,19 +74,17 @@ enum res_t { LR, MR, HR };
 res_t resolution[LED_STRIP_LENGTH];
 uint16_t lower_bins[LED_STRIP_LENGTH];
 uint16_t upper_bins[LED_STRIP_LENGTH];
-uint16_t levelcurve_lr[NSAMP/2];
-uint16_t levelcurve_mr[NSAMP/2];
-uint16_t levelcurve_hr[NSAMP/2];
 uint16_t hr_min_bin, hr_max_bin, hr_max_led_idx;
+// level curve data for fletcher-munson eq (TODO implement)
+uint16_t levelcurve_lr[NSAMP/2];
+uint16_t levelcurve_mr[MID_RES_FACTOR*NSAMP/2];
+uint16_t levelcurve_hr[HIGH_RES_FACTOR*NSAMP/2];
 
-// global variables for sharing between cores
-// lock is exchanged with message passing via writing to the intercore FIFO
+// shared global buffers and semaphore
 kiss_fft_scalar hr_fft_in[NSAMP*HIGH_RES_FACTOR]; // kiss_fft_scalar is a float
 kiss_fft_cpx hr_fft_out[NSAMP*HIGH_RES_FACTOR];
-kiss_fftr_cfg hr_fft_cfg;
-
-queue_t fft_input_q;
-queue_t fft_output_q;
+semaphore_t fft_sem;
+bool todo_fft;
 
 void setup();
 void sample(uint8_t *capture_buf);
@@ -93,13 +92,22 @@ void compute_levelcurves();
 void core1_entry();
 
 void core1_entry() {
+    kiss_fftr_cfg hr_fft_cfg = kiss_fftr_alloc(NSAMP*HIGH_RES_FACTOR,false,0,0);
     // do large FFT on second core
-    hr_fft_cfg = kiss_fftr_alloc(NSAMP*HIGH_RES_FACTOR,false,0,0);
     while (1) {
-        queue_remove_blocking(&fft_input_q, &hr_fft_in);
-        kiss_fftr(hr_fft_cfg, hr_fft_in, hr_fft_out);
-        queue_add_blocking(&fft_output_q, &hr_fft_out);
+        bool do_fft = sem_acquire_timeout_us(&fft_sem, 100);
+        if (do_fft) {
+            printf("1:acq\n");
+            if (todo_fft) {
+                kiss_fftr(hr_fft_cfg, hr_fft_in, hr_fft_out);
+                todo_fft = false;
+            }
+            printf("1:rel\n");
+            sem_release(&fft_sem);
+        }
+        sleep_ms(2);
     }
+    kiss_fft_free(hr_fft_cfg);
 }
 
 int main() {
@@ -113,14 +121,11 @@ int main() {
     kiss_fftr_cfg mr_fft_cfg = kiss_fftr_alloc(NSAMP*MID_RES_FACTOR,false,0,0);
     // keep a copy of the global input buffer for the highres FFT
     kiss_fft_scalar hr_fft_ibuf[NSAMP*HIGH_RES_FACTOR];
-    kiss_fft_cpx hr_fft_obuf[NSAMP*HIGH_RES_FACTOR];
   
     // track brightness of leds to give some persistence
     uint8_t led_brightness[LED_STRIP_LENGTH];
     // setup ports and outputs
     setup();
-    // send data to core1 to start the loop
-    queue_add_blocking(&fft_input_q, &hr_fft_ibuf);
   
     // set up LED strip
 #ifdef WRGB
@@ -134,9 +139,9 @@ int main() {
     ledStrip.show();
   
     uint8_t cycle = 0;
+    uint32_t last_sum[HIGH_RES_FACTOR] = {0};
 
     sleep_ms(1000);
-
     printf("base = %2.5f\n", base);
     printf("center_freqs = [\n");
     for (int i = 0; i < 10; i++) {
@@ -154,6 +159,14 @@ int main() {
         printf("\n");
     }
     printf("]\n");
+    
+    // set up semaphore for sending data to and from core1 for computing the high res FFT
+    todo_fft = true;
+    sem_init(&fft_sem,1,1); // only one permit
+    sleep_ms(100);
+    // launch FFT engine on second core
+    multicore_launch_core1(core1_entry);
+    sleep_ms(100);
 
     while (1) {
         // get NSAMP samples at FSAMP
@@ -166,87 +179,80 @@ int main() {
         }
         // don't worry about non-symmetric rounding error; there's a bunch of noise already
         uint8_t avg = (uint8_t)(sum/NSAMP);
+        for (int j = 0; j < HIGH_RES_FACTOR-1; j++) {
+            last_sum[j+1] = last_sum[j];
+        }
+        last_sum[0] = sum;
+        uint32_t mr_sum = 0;
+        uint32_t hr_sum = 0;
+        for (int j = 0; j < HIGH_RES_FACTOR; j++) {
+            if (j < MID_RES_FACTOR) {
+                mr_sum += last_sum[j];
+            }
+            hr_sum += last_sum[j];
+        }
+        uint8_t mr_avg = (uint8_t)(mr_sum/(NSAMP*MID_RES_FACTOR));
+        uint8_t hr_avg = (uint8_t)(hr_sum/(NSAMP*HIGH_RES_FACTOR));
         for (int i = 0; i < NSAMP; i++) {
             lr_fft_in[i] = cap_buf[i]-avg;
-            mr_fft_in[(cycle % MID_RES_FACTOR)*NSAMP+i] = cap_buf[i]-avg;
-            hr_fft_ibuf[(cycle % HIGH_RES_FACTOR)*NSAMP+i] = cap_buf[i]-avg;
-            //hr_fft_in[(cycle % HIGH_RES_FACTOR)*NSAMP+i] = cap_buf[i]-avg;
+            mr_fft_in[(cycle % MID_RES_FACTOR)*NSAMP+i] = cap_buf[i]-mr_avg;
+            hr_fft_ibuf[(cycle % HIGH_RES_FACTOR)*NSAMP+i] = cap_buf[i]-hr_avg;
         }
-        //bool process_hr_fft = (cycle % HIGH_RES_FACTOR) == 0;
-        bool process_hr_fft = !queue_is_empty(&fft_output_q);
-        // while (multicore_fifo_rvalid()) {
-        //     multicore_fifo_pop_blocking();
-        //     process_hr_fft = true;
-        // }
-        if (process_hr_fft) {
-            // get data from FFT results and set LED brightness
-            queue_remove_blocking(&fft_output_q, &hr_fft_obuf);
-            for (int i = 0; i < LED_STRIP_LENGTH; i++) {
-                if (resolution[i] != HR) { break; }
-                uint32_t led_power = 0;
-                for (int bin = lower_bins[i]; bin < upper_bins[i]; bin++) {
-                    kiss_fft_cpx X = hr_fft_obuf[bin];
-                    led_power += levelcurve_hr[bin]*(X.r*X.r + X.i*X.i);
+        bool process_fft = sem_acquire_timeout_us(&fft_sem, 100);
+        if (process_fft) {
+            printf("0:acq\n");
+            if (!todo_fft) {
+                // get data from FFT results and set LED brightness
+                printf("HR LED_PSD = [\n");
+                for (int i = 0; i < LED_STRIP_LENGTH; i++) {
+                    if (resolution[i] != HR) { break; }
+                    uint32_t led_power = 0;
+                    for (int bin = lower_bins[i]; bin <= upper_bins[i]; bin++) {
+                        kiss_fft_cpx X = hr_fft_out[bin];
+                        led_power += levelcurve_hr[bin]*(X.r*X.r + X.i*X.i);
+                    }
+                    led_psd[i] = 1e-3 * (led_power / (upper_bins[i] - lower_bins[i] + 1));
+                    printf("%f, ", led_psd[i]);
+                    if (i % 12 == 11) {
+                        printf("\n");
+                    }
                 }
-                led_psd[i] = 1e-3 * (led_power / (upper_bins[i] - lower_bins[i] + 1)) * HIGH_RES_FACTOR;
+                printf("]\n");
+
+                // send core to do FFT
+                memcpy(hr_fft_in, hr_fft_ibuf, sizeof(kiss_fft_scalar)*NSAMP*HIGH_RES_FACTOR);
+                todo_fft = true;
             }
-            // send core to do FFT
-            //memcpy(hr_fft_in, hr_fft_ibuf, HIGH_RES_FACTOR*NSAMP*sizeof(kiss_fft_scalar));
-            //printf("calculating hr-FFT on core0...");
-            //kiss_fftr(hr_fft_cfg, hr_fft_in, hr_fft_out);
-            //printf("finished hr-FFT on core0\n");
-            queue_add_blocking(&fft_input_q, &hr_fft_ibuf);
-            //multicore_fifo_push_blocking(0);
-            //printf("message to core1 sent!\n");
+            printf("0:rel\n");
+            sem_release(&fft_sem);
+        } else {
+            sleep_ms(2);
         }
   
         // compute MID/LOW RES FFTs
         // since fft_in[n] is real, we only need half the spectrum since it will be symmetric
-        uint64_t t0 = time_us_64();
         kiss_fftr(lr_fft_cfg, lr_fft_in, lr_fft_out);
-        uint64_t t1 = time_us_64();
-        //printf("%d-point fft took %dus\n",NSAMP,t1-t0);
-        t0 = time_us_64();
         kiss_fftr(mr_fft_cfg, mr_fft_in, mr_fft_out);
-        t1 = time_us_64();
-        //printf("%d-point fft took %dus\n",NSAMP*MID_RES_FACTOR,t1-t0);
-        //printf("base = %2.5f\n", base);
-        //printf("led_psd = [");
-        //for (int i = 0; i < 10; i++) {
-        //    for (int j = 0; j < 12; j++) {
-        //        printf("%f ", led_psd[12*i+j]);
-        //    }
-        //    printf("\n");
-        //}
-        //printf("]");
-        //printf("(res, center_freq, lower_bin, upper_bin = [");
-        //for (int i = 0; i < 10; i++) {
-        //    for (int j = 0; j < 12; j++) {
-        //        printf("(%d, %f, %d, %d)  ", resolution[i*12+j], center_freqs[i*12+j], lower_bins[i*12+j], upper_bins[i*12+j]);
-        //    }
-        //    printf("\n");
-        //}
-        //printf("]");
 
-        // get LED brightness from PSD
+        // get LED brightness from PSD for non-highres PSD
         for (int i = hr_max_led_idx+1; i < LED_STRIP_LENGTH; i++) {
             uint32_t led_power = 0;
             uint8_t factor; // how much to multiply PSD by to account for frequency spacing of bins
             kiss_fft_cpx X;
             if (resolution[i] == MR) {
                 factor = MID_RES_FACTOR;
-                for (int bin = lower_bins[i]; bin < upper_bins[i]; bin++) {
+                for (int bin = lower_bins[i]; bin <= upper_bins[i]; bin++) {
                     X = mr_fft_out[bin];
                     led_power += levelcurve_mr[bin]*(X.r*X.r + X.i*X.i);
                 }
             } else {
                 factor = 1;
-                for (int bin = lower_bins[i]; bin < upper_bins[i]; bin++) {
+                for (int bin = lower_bins[i]; bin <= upper_bins[i]; bin++) {
                     X = lr_fft_out[bin];
                     led_power += levelcurve_lr[bin]*(X.r*X.r + X.i*X.i);
                 }
             }
-            led_psd[i] = 1e-3 * ((float)led_power / (upper_bins[i] - lower_bins[i] + 1)) * factor;
+            led_psd[i] = 1e-3 * ((float)led_power / (upper_bins[i] - lower_bins[i] + 1));
         }
         for (int i = 0; i < LED_STRIP_LENGTH; i++) {
             // convert to brightness
@@ -290,7 +296,6 @@ int main() {
     // should never get here
     kiss_fft_free(lr_fft_cfg);
     kiss_fft_free(mr_fft_cfg);
-    kiss_fft_free(hr_fft_cfg);
 }
 
 void sample(uint8_t *capture_buf) {
@@ -387,12 +392,6 @@ void setup() {
 
     // Pace transfers based on availability of ADC samples
     channel_config_set_dreq(&cfg, DREQ_ADC);
-    
-    // set up queues
-    queue_init(&fft_input_q, sizeof(kiss_fft_scalar)*NSAMP*HIGH_RES_FACTOR, 1);
-    queue_init(&fft_output_q, sizeof(kiss_fft_cpx)*NSAMP*HIGH_RES_FACTOR, 1);
-    // launch FFT engine on second core
-    multicore_launch_core1(core1_entry);
 }
 
 void compute_levelcurves() {
