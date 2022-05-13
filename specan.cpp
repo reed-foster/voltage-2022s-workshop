@@ -69,61 +69,41 @@
 // globals
 dma_channel_config cfg;
 uint dma_chan;
-// get fft bin index ranges for each LED
+// util for log-frequency spacing
 double base;
 double center_freqs[LED_STRIP_LENGTH];
-enum res_t { LR, MR, HR };
-res_t resolution[LED_STRIP_LENGTH];
 uint16_t lower_bins[LED_STRIP_LENGTH];
 uint16_t upper_bins[LED_STRIP_LENGTH];
+// multiresolution analysis
+#ifndef SHORT_WRGB
+enum res_t { LR, MR, HR };
+res_t resolution[LED_STRIP_LENGTH];
 uint16_t hr_min_bin, hr_max_bin, hr_max_led_idx;
+#endif /*SHORT_WRGB*/
+
 // level curve data for fletcher-munson eq (TODO implement)
+#ifdef SHORT_WRGB
+uint16_t levelcurve[NSAMP/2];
+#else /*SHORT_WRGB*/
 uint16_t levelcurve_lr[NSAMP/2];
 uint16_t levelcurve_mr[MID_RES_FACTOR*NSAMP/2];
 uint16_t levelcurve_hr[HIGH_RES_FACTOR*NSAMP/2];
+#endif /*SHORT_WRGB*/
 
+#ifndef SHORT_WRGB
 // shared global buffers and semaphore
 kiss_fft_scalar * hr_fft_in;//[NSAMP*HIGH_RES_FACTOR];
 kiss_fft_cpx * hr_fft_out;//[NSAMP*HIGH_RES_FACTOR];
 semaphore_t fft_sem;
 bool todo_fft;
+#endif /*SHORT_WRGB*/
 
 void setup();
 void sample(uint8_t *capture_buf);
 void compute_levelcurves();
-void kiss_fft_test();
-void core1_entry();
 
-void kiss_fft_test() {
-    printf("==== testing kiss_fft ====\n");
-    for (int nfft = 16; nfft <= 1024; nfft *= 8) {
-        kiss_fft_scalar x[nfft];
-        kiss_fft_cpx X[nfft];
-        kiss_fftr_cfg fft_cfg = kiss_fftr_alloc(nfft,false,0,0);
-        // prepare x
-        float omega0 = 2*3.14159265/nfft;
-        for (int pre = 1; pre <= 8; pre *= 2) {
-            printf("\ntesting cos(%d*omega0*n):\n",pre);
-            printf("x = [");
-            for (int n = 0; n < nfft; n++) {
-                x[n] = KISS_FFT_COS(omega0*pre*n);
-                printf("%d", x[n]);
-                if (n < nfft-1) { printf(", "); }
-                if (n % 16 == 0) { printf("\n"); }
-            }
-            printf("]\nX = [");
-            kiss_fftr(fft_cfg, x, X);
-            for (int k = 0; k < nfft/2; k++) {
-                printf("%d",X[k].r);
-                if (X[k].i >= 0) { printf("+"); }
-                printf("%dj", X[k].i);
-                if (k < nfft/2-1) { printf(", "); }
-                if (k % 16 == 0) { printf("\n"); }
-            }
-            printf("]\n");
-        }
-    }
-}
+#ifndef SHORT_WRGB
+void core1_entry();
 
 void core1_entry() {
     kiss_fftr_cfg hr_fft_cfg = kiss_fftr_alloc(NSAMP*HIGH_RES_FACTOR,false,0,0);
@@ -133,51 +113,25 @@ void core1_entry() {
         if (do_fft) {
 #ifdef SEMAPHOREDEBUG
             printf("1:acq\n");
-#endif
+#endif /*SEMAPHOREDEBUG*/
             if (todo_fft) {
-                //printf("x[n] = [");
-                //for (int n = 0; n < NSAMP*HIGH_RES_FACTOR; n++) {
-                //    printf("%d", hr_fft_in[n]);
-                //    if (n < NSAMP*HIGH_RES_FACTOR-1) {
-                //        printf(", ");
-                //        if (n % 32 == 31) { printf("\n"); }
-                //    }
-                //}
                 kiss_fftr(hr_fft_cfg, hr_fft_in, hr_fft_out);
-                //printf("]\nX[k] = [");
-                //for (int k = 0; k < NSAMP*HIGH_RES_FACTOR/2; k++) {
-                //    printf("%d", hr_fft_out[k].r);
-                //    if (hr_fft_out[k].i >= 0) { printf("+"); }
-                //    printf("%dj", hr_fft_out[k].i);
-                //    if (k < NSAMP*HIGH_RES_FACTOR/2-1) {
-                //        printf(", ");
-                //        if (k % 32 == 31) { printf("\n"); }
-                //    }
-                //}
-                //printf("]\n");
                 todo_fft = false;
             }
 #ifdef SEMAPHOREDEBUG
             printf("1:rel\n");
-#endif
+#endif /*SEMAPHOREDEBUG*/
             sem_release(&fft_sem);
         }
         sleep_ms(2);
     }
     kiss_fft_free(hr_fft_cfg);
 }
+#endif /*SHORT_WRGB*/
 
 int main() {
     uint8_t cap_buf[NSAMP];
     float led_psd[LED_STRIP_LENGTH];
-    kiss_fftr_cfg lr_fft_cfg = kiss_fftr_alloc(NSAMP,false,0,0);
-    kiss_fftr_cfg mr_fft_cfg = kiss_fftr_alloc(NSAMP*MID_RES_FACTOR,false,0,0);
-    // keep a copy of the global input buffer for the highres FFT
-    kiss_fft_scalar * hr_fft_ibuf;
-    kiss_fft_scalar * mr_fft_in;
-    kiss_fft_scalar * lr_fft_in;
-    kiss_fft_cpx * lr_fft_out;
-    kiss_fft_cpx * mr_fft_out;
   
     // track brightness of leds to give some persistence
     uint8_t led_brightness[LED_STRIP_LENGTH];
@@ -196,21 +150,30 @@ int main() {
     ledStrip.show();
   
     uint8_t cycle = 0;
+#ifndef SHORT_WRGB
     uint32_t last_sum[HIGH_RES_FACTOR] = {0};
+#endif
 
     sleep_ms(1000);
 
+#ifdef SHORT_WRGB
+    kiss_fft_scalar* fft_in = (kiss_fft_scalar *)malloc(NSAMP*sizeof(kiss_fft_scalar));
+    kiss_fft_cpx* fft_out = (kiss_fft_cpx *)malloc(NSAMP*sizeof(kiss_fft_cpx));
+    kiss_fftr_cfg fft_cfg = kiss_fftr_alloc(NSAMP,false,0,0);
+#else
+    kiss_fftr_cfg lr_fft_cfg = kiss_fftr_alloc(NSAMP,false,0,0);
+    kiss_fftr_cfg mr_fft_cfg = kiss_fftr_alloc(NSAMP*MID_RES_FACTOR,false,0,0);
     // hr_fft_ibuf is used by core0
     // hr_fft_in is used by core1
-    hr_fft_ibuf = (kiss_fft_scalar *)malloc(NSAMP*HIGH_RES_FACTOR*sizeof(kiss_fft_scalar));
+    kiss_fft_scalar* hr_fft_ibuf = (kiss_fft_scalar *)malloc(NSAMP*HIGH_RES_FACTOR*sizeof(kiss_fft_scalar));
     hr_fft_in = (kiss_fft_scalar *)malloc(NSAMP*HIGH_RES_FACTOR*sizeof(kiss_fft_scalar));
-    mr_fft_in = (kiss_fft_scalar *)malloc(NSAMP*MID_RES_FACTOR*sizeof(kiss_fft_scalar));
-    lr_fft_in = (kiss_fft_scalar *)malloc(NSAMP*sizeof(kiss_fft_scalar));
-    mr_fft_out = (kiss_fft_cpx *)malloc(NSAMP*MID_RES_FACTOR*sizeof(kiss_fft_cpx));
-    lr_fft_out = (kiss_fft_cpx *)malloc(NSAMP*sizeof(kiss_fft_cpx));
+    kiss_fft_scalar* mr_fft_in = (kiss_fft_scalar *)malloc(NSAMP*MID_RES_FACTOR*sizeof(kiss_fft_scalar));
+    kiss_fft_scalar* lr_fft_in = (kiss_fft_scalar *)malloc(NSAMP*sizeof(kiss_fft_scalar));
+    kiss_fft_cpx* mr_fft_out = (kiss_fft_cpx *)malloc(NSAMP*MID_RES_FACTOR*sizeof(kiss_fft_cpx));
+    kiss_fft_cpx* lr_fft_out = (kiss_fft_cpx *)malloc(NSAMP*sizeof(kiss_fft_cpx));
     hr_fft_out = (kiss_fft_cpx *)malloc(NSAMP*HIGH_RES_FACTOR*sizeof(kiss_fft_cpx));
+#endif
     
-    sleep_ms(1000);
     printf("base = %2.5f\n", base);
     printf("center_freqs = [\n");
     for (int i = 0; i < 10; i++) {
@@ -223,13 +186,17 @@ int main() {
     printf("(resolution, lower_bins, upper_bins) = [\n");
     for (int i = 0; i < 10; i++) {
         for (int j = 0; j < 12; j++) {
+#ifdef SHORT_WRGB
+            printf("(N/A,%d,%d) ", lower_bins[i*12+j], upper_bins[i*12+j]);
+#else
             printf("(%d,%d,%d) ", resolution[i*12+j], lower_bins[i*12+j], upper_bins[i*12+j]);
+#endif /*SHORT_WRGB*/
         }
         printf("\n");
     }
     printf("]\n");
-    //kiss_fft_test();
-    
+
+#ifndef SHORT_WRGB
     // set up semaphore for sending data to and from core1 for computing the high res FFT
     todo_fft = true;
     sem_init(&fft_sem,1,1); // only one permit
@@ -237,6 +204,7 @@ int main() {
     // launch FFT engine on second core
     multicore_launch_core1(core1_entry);
     sleep_ms(100);
+#endif /*SHORT_WRGB*/
 
     while (1) {
         // get NSAMP samples at FSAMP
@@ -249,6 +217,22 @@ int main() {
         }
         // don't worry about non-symmetric rounding error; there's a bunch of noise already
         uint8_t avg = (uint8_t)(sum/NSAMP);
+#ifdef SHORT_WRGB
+        for (int i = 0; i < NSAMP; i++) {
+            fft_in[i] = cap_buf[i]-avg;
+        }
+        kiss_fftr(fft_cfg, fft_in, fft_out);
+        // get LED brightness from PSD
+        for (int i = 0; i < LED_STRIP_LENGTH; i++) {
+            uint32_t led_power = 0;
+            kiss_fft_cpx X;
+            for (int bin = lower_bins[i]; bin <= upper_bins[i]; bin++) {
+                X = fft_out[bin];
+                led_power += levelcurve[bin]*(X.r*X.r + X.i*X.i);
+            }
+            led_psd[i] = 1e-3 * ((float)led_power / (upper_bins[i] - lower_bins[i] + 1));
+        }
+#else /*SHORT_WRGB*/
         for (int j = 0; j < HIGH_RES_FACTOR-1; j++) {
             last_sum[j+1] = last_sum[j];
         }
@@ -272,7 +256,7 @@ int main() {
         if (process_fft) {
 #ifdef SEMAPHOREDEBUG
             printf("0:acq\n");
-#endif
+#endif /*SEMAPHOREDEBUG*/
             if (!todo_fft) {
                 // get data from FFT results and set LED brightness
                 for (int i = 0; i < LED_STRIP_LENGTH; i++) {
@@ -291,7 +275,7 @@ int main() {
             }
 #ifdef SEMAPHOREDEBUG
             printf("0:rel\n");
-#endif
+#endif /*SEMAPHOREDEBUG*/
             sem_release(&fft_sem);
         } else {
             sleep_ms(2);
@@ -305,16 +289,13 @@ int main() {
         // get LED brightness from PSD for non-highres PSD
         for (int i = hr_max_led_idx+1; i < LED_STRIP_LENGTH; i++) {
             uint32_t led_power = 0;
-            uint8_t factor; // how much to multiply PSD by to account for frequency spacing of bins
             kiss_fft_cpx X;
             if (resolution[i] == MR) {
-                factor = MID_RES_FACTOR;
                 for (int bin = lower_bins[i]; bin <= upper_bins[i]; bin++) {
                     X = mr_fft_out[bin];
                     led_power += levelcurve_mr[bin]*(X.r*X.r + X.i*X.i);
                 }
             } else {
-                factor = 1;
                 for (int bin = lower_bins[i]; bin <= upper_bins[i]; bin++) {
                     X = lr_fft_out[bin];
                     led_power += levelcurve_lr[bin]*(X.r*X.r + X.i*X.i);
@@ -322,6 +303,7 @@ int main() {
             }
             led_psd[i] = 1e-3 * ((float)led_power / (upper_bins[i] - lower_bins[i] + 1));
         }
+#endif /*SHORT_WRGB*/
         for (int i = 0; i < LED_STRIP_LENGTH; i++) {
             // convert to brightness
             float log_psd = log2(led_psd[i]);
@@ -359,11 +341,13 @@ int main() {
         ledStrip.show();
         cycle++;
     }
-  
-    // should never get here
+#ifdef SHORT_WRGB
+    kiss_fft_free(fft_cfg);  
+    free(fft_in);  
+    free(fft_out);  
+#else /*SHORT_WRGB*/
     kiss_fft_free(lr_fft_cfg);
     kiss_fft_free(mr_fft_cfg);
-
     free(hr_fft_ibuf);
     free(hr_fft_in);
     free(mr_fft_in);
@@ -371,6 +355,7 @@ int main() {
     free(mr_fft_out);
     free(lr_fft_out);
     free(hr_fft_out);
+#endif /*SHORT_WRGB*/
 }
 
 void sample(uint8_t *capture_buf) {
@@ -395,11 +380,14 @@ void setup() {
 
     // calculate allocation of frequency ranges to leds
     base = pow((double)FMAX/FMIN,1.0/((double)(LED_STRIP_LENGTH-1)));
+#ifndef SHORT_WRGB
     hr_max_led_idx = 0;
     double lr_lim = (double)FSAMP*(1/((double)NSAMP));
     double mr_lim = (double)FSAMP*(1/((double)NSAMP*MID_RES_FACTOR));
+#endif /*SHORT_WRGB*/
     for (int led_idx = 0; led_idx < LED_STRIP_LENGTH; led_idx++) {
         center_freqs[led_idx] = FMIN*pow(base, (double)led_idx);
+#ifndef SHORT_WRGB
         if (led_idx == 0) {
             resolution[led_idx] = HR;
         } else {
@@ -412,14 +400,18 @@ void setup() {
                 hr_max_led_idx = led_idx;
             }
         }
+#endif /*SHORT_WRGB*/
     }
+
     for (int led_idx = 0; led_idx < LED_STRIP_LENGTH; led_idx++) {
         double bin_factor = ((double)NSAMP)/FSAMP;
+#ifndef SHORT_WRGB
         if (resolution[led_idx] == HR) {
             bin_factor *= HIGH_RES_FACTOR;
         } else if (resolution[led_idx] == MR) {
             bin_factor *= MID_RES_FACTOR;
         }
+#endif /*SHORT_WRGB*/
         if (led_idx == 0) {
             lower_bins[led_idx] = (uint16_t)round(center_freqs[led_idx]*bin_factor);
         } else {
@@ -431,8 +423,10 @@ void setup() {
             upper_bins[led_idx] = (uint16_t)round(0.5*(center_freqs[led_idx] + center_freqs[led_idx+1])*bin_factor);
         }
     }
+#ifndef SHORT_WRGB
     hr_min_bin = lower_bins[0];
     hr_max_bin = upper_bins[hr_max_led_idx];
+#endif /*SHORT_WRGB*/
 
     // precompute levelcurve data
     compute_levelcurves();
@@ -479,10 +473,14 @@ void compute_levelcurves() {
     // high frequency pole is probably still around 3500Hz
     for (uint16_t i = 0 ; i < NSAMP/2; i++) {
         // pole at 5kHz
+#ifdef SHORT_WRGB
+        levelcurve[i] = 256;
+#else /*SHORT_WRGB*/
         levelcurve_lr[i] = 256*(1+pow((i*FSAMP/NSAMP)/3500,2));
         levelcurve_lr[i] = 256;
         levelcurve_mr[i] = 256;
         levelcurve_hr[i] = 256;
+#endif /*SHORT_WRGB*/
     }
 }
 
