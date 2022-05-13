@@ -7,9 +7,8 @@
 #include <stdio.h>
 #include <math.h>
 #include "pico/stdlib.h"
-// multicore + queue
+// multicore + semaphore
 #include "pico/multicore.h"
-#include "pico/util/queue.h"
 #include "pico/sem.h"
 
 // ADC/FFT
