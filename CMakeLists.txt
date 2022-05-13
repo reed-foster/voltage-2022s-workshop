@@ -23,6 +23,7 @@ pico_enable_stdio_uart(specan 1)
 
 
 target_link_libraries(specan
+	pico_multicore
 	pico_stdlib
 	hardware_adc
 	hardware_dma
