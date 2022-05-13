@@ -46,22 +46,20 @@
 #else
 #define NSAMP 512
 #define LED_STRIP_LENGTH 120
-// multiresolution analysis:
-// HIGH_RES_FACTOR: X*NSAMP-point FFT for high resolution transform
-// for NSAMP = 512, we'll have FFT data with a resolution of 96Hz/div
-// MID_RES FFT will incrase that to 24Hz/div, and HIGH_RES FFT will have
-// a resolution of 12Hz/div
+// multiresolution analysis nfft scaling factors
 #define HIGH_RES_FACTOR 8
 #define MID_RES_FACTOR 4
 // we'll offload the computation of the large FFT to a second core because it will take a while
-#define SEMAPHOREDEBUG
+// define SEMAPHOREDEBUG in order to print acquire/release messages from each core
+//#define SEMAPHOREDEBUG
 #endif
 
 // FMAX/FMIN are maximum/minimum frequency displayed by LEDs
+// make sure that MAX_BIN = FMAX/FSAMP*NSAMP and MIN_BIN = FMIN/FSAMP*NSAMP
+#define MAX_BIN NSAMP/4
+#define MIN_BIN NSAMP/480
 #define FMAX 12000.0
-#define FMIN 100
-#define MAX_BIN NSAMP*FMAX/FSAMP
-#define MIN_BIN NSAMP*FMIN/FSAMP
+#define FMIN 100.0
 
 #define LED_STRIP_PIN 0
 
@@ -82,11 +80,11 @@ uint16_t hr_min_bin, hr_max_bin, hr_max_led_idx;
 
 // level curve data for fletcher-munson eq (TODO implement)
 #ifdef SHORT_WRGB
-uint16_t levelcurve[NSAMP/2];
+uint16_t levelcurve[MAX_BIN];
 #else /*SHORT_WRGB*/
-uint16_t levelcurve_lr[NSAMP/2];
-uint16_t levelcurve_mr[MID_RES_FACTOR*NSAMP/2];
-uint16_t levelcurve_hr[HIGH_RES_FACTOR*NSAMP/2];
+uint16_t levelcurve_lr[MAX_BIN];
+uint16_t levelcurve_mr[MID_RES_FACTOR*MAX_BIN];
+uint16_t levelcurve_hr[HIGH_RES_FACTOR*MAX_BIN];
 #endif /*SHORT_WRGB*/
 
 #ifndef SHORT_WRGB
@@ -100,6 +98,7 @@ bool todo_fft;
 void setup();
 void sample(uint8_t *capture_buf);
 void compute_levelcurves();
+double iso226(double f, double L_n);
 
 #ifndef SHORT_WRGB
 void core1_entry();
@@ -141,25 +140,25 @@ int main() {
 #ifdef WRGB
     // color order for PicoLed::WRGB define isn't quite right; just do it manually
     auto ledStrip = PicoLed::addLeds<PicoLed::WS2812B>(pio0, 0, LED_STRIP_PIN, LED_STRIP_LENGTH, PicoLed::GREEN, PicoLed::RED, PicoLed::BLUE, PicoLed::WHITE);
-#else
+#else /*WRGB*/
     auto ledStrip = PicoLed::addLeds<PicoLed::WS2812B>(pio0, 0, LED_STRIP_PIN, LED_STRIP_LENGTH, PicoLed::FORMAT_GRB);
-#endif
+#endif /*WRGB*/
     ledStrip.setBrightness(64);
     ledStrip.fill(PicoLed::RGB(255,0,0));
     ledStrip.show();
+
+    sleep_ms(1000);
   
     uint8_t cycle = 0;
 #ifndef SHORT_WRGB
     uint32_t last_sum[HIGH_RES_FACTOR] = {0};
-#endif
-
-    sleep_ms(1000);
+#endif /*SHORT_WRGB*/
 
 #ifdef SHORT_WRGB
     kiss_fft_scalar* fft_in = (kiss_fft_scalar *)malloc(NSAMP*sizeof(kiss_fft_scalar));
     kiss_fft_cpx* fft_out = (kiss_fft_cpx *)malloc(NSAMP*sizeof(kiss_fft_cpx));
     kiss_fftr_cfg fft_cfg = kiss_fftr_alloc(NSAMP,false,0,0);
-#else
+#else /*SHORT_WRGB*/
     kiss_fftr_cfg lr_fft_cfg = kiss_fftr_alloc(NSAMP,false,0,0);
     kiss_fftr_cfg mr_fft_cfg = kiss_fftr_alloc(NSAMP*MID_RES_FACTOR,false,0,0);
     // hr_fft_ibuf is used by core0
@@ -171,9 +170,25 @@ int main() {
     kiss_fft_cpx* mr_fft_out = (kiss_fft_cpx *)malloc(NSAMP*MID_RES_FACTOR*sizeof(kiss_fft_cpx));
     kiss_fft_cpx* lr_fft_out = (kiss_fft_cpx *)malloc(NSAMP*sizeof(kiss_fft_cpx));
     hr_fft_out = (kiss_fft_cpx *)malloc(NSAMP*HIGH_RES_FACTOR*sizeof(kiss_fft_cpx));
-#endif
+#endif /*SHORT_WRGB*/
+
+    printf("MAX_BIN = %d, MIN_BIN = %d\n", MAX_BIN, MIN_BIN);
+    printf("FMAX = %f, FMIN = %f\n", FMAX, FMIN);
+    printf("levelcurves = [");
+    for (int i = 0; i < MAX_BIN; i++) {
+#ifdef SHORT_WRGB
+        printf("%d", levelcurve[i]);
+#else /*SHORT_WRGB*/
+        printf("%d", levelcurve_lr[i]);
+#endif /*SHORT_WRGB*/
+        if (i < MAX_BIN - 1) {
+            printf(", ");
+            if (i % 32 == 31) { printf("\n"); }
+        }
+    }
+    printf("]\n");
     
-    printf("base = %2.5f\n", base);
+    printf("base = %f, FMAX/FMIN = %f\n", base, ((double)FMAX)/FMIN);
     printf("center_freqs = [\n");
     for (int i = 0; i < 10; i++) {
         for (int j = 0; j < 12; j++) {
@@ -378,7 +393,7 @@ void setup() {
     stdio_init_all();
 
     // calculate allocation of frequency ranges to leds
-    base = pow((double)FMAX/FMIN,1.0/((double)(LED_STRIP_LENGTH-1)));
+    base = pow(((double)FMAX)/FMIN,1.0/((double)(LED_STRIP_LENGTH-1)));
 #ifndef SHORT_WRGB
     hr_max_led_idx = 0;
     double lr_lim = (double)FSAMP*(1/((double)NSAMP));
@@ -463,6 +478,7 @@ void setup() {
 }
 
 void compute_levelcurves() {
+    // compensate for transfer function of speaker -> air -> microphone and weight based on perceived loudness
     // measured microphone response
     // f is frequency in Hz of a sinewave, a is amplitude of amplifier output in mVpp
     // f = [150 220 300 400 500 550 600 650 700 800 900 1000 1500 2000 2500 2800 3000 3500 4000 5000 7500 9000 12000 15000];
@@ -470,16 +486,47 @@ void compute_levelcurves() {
     // poles at 500Hz (bin 5) and 3500Hz (bin 37) for 512-point FFT
     // remeasured with good speaker and low freqency pole is gone
     // high frequency pole is probably still around 3500Hz
-    for (uint16_t i = 0 ; i < NSAMP/2; i++) {
-        // pole at 5kHz
+    //
+    double L_n = 40; // assume 40 Phon for now, correct later with some sort of avg. power
+    double L_p1k = iso226(1000, L_n);
+    double f;
 #ifdef SHORT_WRGB
-        levelcurve[i] = 256;
+    for (uint16_t i = 0 ; i < MAX_BIN; i++) {
+        // pole at 5kHz
+        f = i*FSAMP/NSAMP;
+        levelcurve[i] = 256*(1+pow(f/3500,2))*pow(10, (L_p1k - iso226(f, L_n))/10);
+    }
 #else /*SHORT_WRGB*/
-        levelcurve_lr[i] = 256*(1+pow((i*FSAMP/NSAMP)/3500,2));
-        levelcurve_lr[i] = 256;
-        levelcurve_mr[i] = 256;
-        levelcurve_hr[i] = 256;
+    for (uint16_t i = 0 ; i < HIGH_RES_FACTOR*MAX_BIN; i++) {
+        if (i < MAX_BIN) {
+            f = i*FSAMP/NSAMP;
+            levelcurve_lr[i] = 256*(1+pow(f/3500,2))*pow(10, (L_p1k - iso226(f, L_n))/10);
+        }
+        if (i < MID_RES_FACTOR*MAX_BIN) {
+            f = i*FSAMP/(NSAMP*MID_RES_FACTOR);
+            levelcurve_mr[i] = 256*(1+pow(f/3500,2))*pow(10, (L_p1k - iso226(f, L_n))/10);
+        }
+        f = i*FSAMP/(NSAMP*HIGH_RES_FACTOR);
+        levelcurve_hr[i] = 256*(1+pow(f/3500,2))*pow(10, (L_p1k - iso226(f, L_n))/10);
 #endif /*SHORT_WRGB*/
     }
+}
+
+double iso226(double f, double L_n) {
+    // iso226 loudness calculation
+    double f0[29] = {20, 25, 31.5, 40, 50, 63, 80, 100, 125, 160, 200, 250, 315, 400, 500, 630, 800, 1000, 1250, 1600, 2000, 2500, 3150, 4000, 5000, 6300, 8000, 10000, 12500};
+    double a_f0[29] = {0.532, 0.506, 0.480, 0.455, 0.432, 0.409, 0.387, 0.367, 0.349, 0.330, 0.315, 0.301, 0.288, 0.276, 0.267, 0.259, 0.253, 0.250, 0.246, 0.244, 0.243, 0.243, 0.243, 0.242, 0.242, 0.245, 0.254, 0.271, 0.301};
+    double L_u0[29] = {-31.6, -27.2, -23.0, -19.1, -15.9, -13.0, -10.3, -8.1, -6.2, -4.5, -3.1, -2.0, -1.1, -0.4, 0.0, 0.3, 0.5, 0.0, -2.7, -4.1, -1.0, 1.7, 2.5, 1.2, -2.1, -7.1, -11.2, -10.7, -3.1};
+    double T_f0[29] = {78.5, 68.7, 59.5, 51.1, 44.0, 37.5, 31.5, 26.5, 22.1, 17.9, 14.4, 11.4, 8.6, 6.2, 4.4, 3.0, 2.2, 2.4, 3.5, 1.7, -1.3, -4.2, -6.0, -5.4, -1.5, 6.0, 12.6, 13.9, 12.3};
+    double a_f, L_u, T_f;
+    // linear interpolation of parameters
+    int f0_low;
+    for (f0_low = 0; f0[f0_low+1] <= f && f0_low < 28; f0_low++) { }
+    a_f = a_f0[f0_low] + (a_f0[f0_low+1]-a_f0[f0_low])/(f0[f0_low+1]-f0[f0_low])*(f-f0[f0_low]);
+    L_u = L_u0[f0_low] + (L_u0[f0_low+1]-L_u0[f0_low])/(f0[f0_low+1]-f0[f0_low])*(f-f0[f0_low]);
+    T_f = T_f0[f0_low] + (T_f0[f0_low+1]-T_f0[f0_low])/(f0[f0_low+1]-f0[f0_low])*(f-f0[f0_low]);
+    double A_F = 0.00447 * (pow(10, 0.025*L_n) - 1.15) + pow((0.4 * pow(10, ((T_f + L_u) / 10) - 9)), a_f);
+    double L_p = (10 / a_f) * log10(A_F) - L_u + 94;
+    return L_p;
 }
 
